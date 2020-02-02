@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
@@ -11,14 +13,21 @@ import (
 
 type counters struct {
 	sync.Mutex
-	view  int
-	click int
+	View  int `json:"view"`
+	Click int `json:"click"`
 }
 
 var (
-	c = counters{}
-
-	content = []string{"sports", "entertainment", "business", "education"}
+	content     = []string{"sports", "entertainment", "business", "education"}
+	counterList map[string]*counters
+	//RateNum is number of requests per time
+	rateNum = 2
+	//RateTime is time limit before refresh
+	rateTime = 10 * time.Second
+	//Rate Queue
+	rateQueue = []time.Time{}
+	//Output file for storage of counter
+	fileName = "output.json"
 )
 
 func welcomeHandler(w http.ResponseWriter, r *http.Request) {
@@ -27,10 +36,8 @@ func welcomeHandler(w http.ResponseWriter, r *http.Request) {
 
 func viewHandler(w http.ResponseWriter, r *http.Request) {
 	data := content[rand.Intn(len(content))]
-
-	c.Lock()
-	c.view++
-	c.Unlock()
+	//Add a view
+	alterCounterList(data, 1, 0)
 
 	err := processRequest(r)
 	if err != nil {
@@ -38,7 +45,6 @@ func viewHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		return
 	}
-
 	// simulate random click call
 	if rand.Intn(100) < 50 {
 		processClick(data)
@@ -51,10 +57,7 @@ func processRequest(r *http.Request) error {
 }
 
 func processClick(data string) error {
-	c.Lock()
-	c.click++
-	c.Unlock()
-
+	alterCounterList(data, 0, 1)
 	return nil
 }
 
@@ -63,20 +66,89 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(429)
 		return
 	}
+	//Read JSON storage file and return to user
+	w.Header().Set("Content-Type", "application/json")
+	var objmap map[string]*counters
+	objmap = make(map[string]*counters)
+	jsonFile, err := ioutil.ReadFile(fileName)
+	if !handleError(err) {
+		return
+	}
+	err = json.Unmarshal(jsonFile, &objmap)
+	if !handleError(err) {
+		return
+	}
+	fmt.Fprint(w, string(jsonFile))
 }
-
 func isAllowed() bool {
-	return true
+	maxIndex := 0
+	for _, elem := range rateQueue {
+		if elem.Add(rateTime).Before(time.Now()) {
+			maxIndex++
+		} else {
+			break
+		}
+	}
+	rateQueue = rateQueue[maxIndex:]
+	if len(rateQueue) < rateNum {
+		rateQueue = append(rateQueue, time.Now().UTC())
+		return true
+	}
+	return false
 }
 
 func uploadCounters() error {
+	bytes, err := json.Marshal(counterList)
+	if !handleError(err) {
+		return err
+	}
+	//Insert Mock Store Here
+	err = ioutil.WriteFile(fileName, bytes, 0644)
+	
+	if !handleError(err) {
+		return err
+	}
 	return nil
 }
 
+func uploadLoop() {
+	for {
+		<-time.After(5 * time.Second)
+		go uploadCounters()
+	}
+}
+
 func main() {
+	counterList = make(map[string]*counters)
+	rateQueue = make([]time.Time, 0)
+	go uploadLoop()
 	http.HandleFunc("/", welcomeHandler)
 	http.HandleFunc("/view/", viewHandler)
 	http.HandleFunc("/stats/", statsHandler)
-
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func getDateTime() string {
+	return time.Now().UTC().Format("2006-01-02 15:04")
+}
+func getKeyValue(data string) string {
+	return data + " : " + getDateTime()
+}
+func alterCounterList(data string, views int, clicks int) {
+	c, exists := counterList[getKeyValue(data)]
+	if !exists {
+		counterList[getKeyValue(data)] = &counters{}
+		c = counterList[getKeyValue(data)]
+	}
+	c.Lock()
+	c.View += views
+	c.Click += clicks
+	c.Unlock()
+}
+func handleError(err error) bool {
+	if err != nil {
+		fmt.Println(err)
+		return false
+	}
+	return true
 }
