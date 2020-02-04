@@ -23,7 +23,7 @@ var (
 	//RateNum is number of requests per time
 	rateNum = 2
 	//RateTime is time limit before refresh
-	rateTime = 10 * time.Second
+	rateTime = 30 * time.Second
 	//Rate Queue
 	rateQueue = []time.Time{}
 	//Output file for storage of counter
@@ -42,6 +42,7 @@ func viewHandler(w http.ResponseWriter, r *http.Request) {
 	err := processRequest(r)
 	if err != nil {
 		fmt.Println(err)
+		fmt.Println("ERROR: Issue processing request")
 		w.WriteHeader(400)
 		return
 	}
@@ -51,6 +52,7 @@ func viewHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+//Insert some view request here
 func processRequest(r *http.Request) error {
 	time.Sleep(time.Duration(rand.Int31n(50)) * time.Millisecond)
 	return nil
@@ -72,10 +74,12 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 	objmap = make(map[string]*counters)
 	jsonFile, err := ioutil.ReadFile(fileName)
 	if !handleError(err) {
+		fmt.Println("ERROR: Failed reading stats file")
 		return
 	}
 	err = json.Unmarshal(jsonFile, &objmap)
 	if !handleError(err) {
+		fmt.Println("ERROR: Failed parsing stats json")
 		return
 	}
 	fmt.Fprint(w, string(jsonFile))
@@ -83,7 +87,7 @@ func statsHandler(w http.ResponseWriter, r *http.Request) {
 func isAllowed() bool {
 	maxIndex := 0
 	for _, elem := range rateQueue {
-		if elem.Add(rateTime).Before(time.Now()) {
+		if elem.Add(rateTime).Before(time.Now().UTC()) {
 			maxIndex++
 		} else {
 			break
@@ -104,7 +108,7 @@ func uploadCounters() error {
 	}
 	//Insert Mock Store Here
 	err = ioutil.WriteFile(fileName, bytes, 0644)
-	
+
 	if !handleError(err) {
 		return err
 	}
